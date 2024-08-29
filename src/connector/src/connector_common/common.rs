@@ -651,30 +651,32 @@ impl NatsCommon {
             .replace(['.', '>', '*', ' ', '\t'], "_");
         let name = format!("risingwave-consumer-{}-{}", subject_name, split_id);
 
-        let deliver_policy = match start_sequence {
-            NatsOffset::Earliest => DeliverPolicy::All,
-            NatsOffset::Latest => DeliverPolicy::Last,
-            NatsOffset::SequenceNumber(v) => {
-                let parsed = v
-                    .parse::<u64>()
-                    .context("failed to parse nats offset as sequence number")?;
-                DeliverPolicy::ByStartSequence {
-                    start_sequence: 1 + parsed,
+        // delivery policy should only be modified for ephemeral consumers
+        // as delivery policy is not an editable attribute. Otherwise,
+        // this will result in a "deliver policy can not be updated" error
+        if config.durable_name.is_none() {
+            let deliver_policy = match start_sequence {
+                NatsOffset::Earliest => DeliverPolicy::All,
+                NatsOffset::Latest => DeliverPolicy::Last,
+                NatsOffset::SequenceNumber(v) => {
+                    let parsed = v
+                        .parse::<u64>()
+                        .context("failed to parse nats offset as sequence number")?;
+                    DeliverPolicy::ByStartSequence {
+                        start_sequence: 1 + parsed,
+                    }
                 }
-            }
-            NatsOffset::Timestamp(v) => DeliverPolicy::ByStartTime {
-                start_time: OffsetDateTime::from_unix_timestamp_nanos(v * 1_000_000)
-                    .context("invalid timestamp for nats offset")?,
-            },
-            NatsOffset::None => DeliverPolicy::All,
-        };
+                NatsOffset::Timestamp(v) => DeliverPolicy::ByStartTime {
+                    start_time: OffsetDateTime::from_unix_timestamp_nanos(v * 1_000_000)
+                        .context("invalid timestamp for nats offset")?,
+                },
+                NatsOffset::None => DeliverPolicy::All,
+            };
 
-        let consumer = stream
-            .get_or_create_consumer(&name, {
-                config.deliver_policy = deliver_policy;
-                config
-            })
-            .await?;
+            config.deliver_policy = deliver_policy;
+        }
+
+        let consumer = stream.get_or_create_consumer(&name, config).await?;
         Ok(consumer)
     }
 
